@@ -114,10 +114,6 @@
     .hidden {
       display: none !important;
     }
-    .small-btn {
-      padding: 10px 12px;
-      font-size: 14px;
-    }
   </style>
 </head>
 <body class="bg-idle">
@@ -129,9 +125,6 @@
       <input id="endpoint" placeholder="Apps Script Web App URL" />
       <input id="eventKey" placeholder="Event key (optional)" />
       <input id="checker" placeholder="Security name" value="Gate Security" />
-
-      <button class="secondary small-btn" onclick="saveSettings()">Save Settings</button>
-      <button class="secondary small-btn" onclick="clearSavedSettings()">Clear Saved Settings</button>
 
       <div id="reader"></div>
 
@@ -159,12 +152,6 @@
     let lastScan = '';
     let lastScanAt = 0;
     let jsonpCounter = 0;
-
-    const STORAGE_KEYS = {
-      endpoint: 'event_scanner_endpoint',
-      eventKey: 'event_scanner_event_key',
-      checker: 'event_scanner_checker'
-    };
 
     function setBodyBg(type) {
       document.body.classList.remove('bg-idle', 'bg-success', 'bg-error', 'bg-duplicate');
@@ -218,7 +205,167 @@
       return scannedText.trim();
     }
 
-    function saveSettings() {
+    function callAppsScriptJsonp(token) {
+      return new Promise((resolve, reject) => {
+        const endpoint = document.getElementById('endpoint').value.trim();
+        const checker = document.getElementById('checker').value.trim() || 'Gate Security';
+        const key = document.getElementById('eventKey').value.trim();
+
+        if (!endpoint) {
+          reject(new Error('Paste your Apps Script Web App URL first.'));
+          return;
+        }
+
+        const cbName = 'scannerCallback_' + (++jsonpCounter);
+
+        window[cbName] = function(data) {
+          cleanup();
+          resolve(data);
+        };
+
+        function cleanup() {
+          try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+          if (script.parentNode) script.parentNode.removeChild(script);
+          clearTimeout(timer);
+        }
+
+        const url = new URL(endpoint);
+        url.searchParams.set('action', 'apiCheckin');
+        url.searchParams.set('token', token);
+        url.searchParams.set('checker', checker);
+        url.searchParams.set('key', key);
+        url.searchParams.set('callback', cbName);
+        url.searchParams.set('_ts', Date.now());
+
+        const script = document.createElement('script');
+        script.src = url.toString();
+
+        script.onerror = function() {
+          cleanup();
+          reject(new Error('Could not reach Apps Script.'));
+        };
+
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('Apps Script timed out.'));
+        }, 8000);
+
+        document.body.appendChild(script);
+      });
+    }
+
+    async function pauseScannerAfterResult() {
+      if (!scanner || !running) return;
       try {
-        localStorage.setItem(STORAGE_KEYS.endpoint, document.getElementById('endpoint').value.trim());
-        localStorage.setItem(STORAGE_KEYS.eventKey,
+        await scanner.pause(true);
+        pausedAfterScan = true;
+      } catch (e) {}
+      showNextButton(true);
+    }
+
+    async function resumeScanner() {
+      if (!scanner || !running) return;
+      try {
+        await scanner.resume();
+        pausedAfterScan = false;
+        busy = false;
+        showNextButton(false);
+        setPanel('', 'Scanner Live', 'Point camera at the next badge.', null);
+        lastScan = '';
+        lastScanAt = 0;
+      } catch (e) {
+        setPanel('error', 'Resume Failed', 'Could not restart camera. Tap Stop Camera, then Start Camera.');
+      }
+    }
+
+    async function handleScan(decodedText) {
+      const now = Date.now();
+      if (busy || pausedAfterScan) return;
+      if (decodedText === lastScan && now - lastScanAt < 2500) return;
+
+      lastScan = decodedText;
+      lastScanAt = now;
+
+      const token = extractToken(decodedText);
+      if (!token) {
+        busy = true;
+        setPanel('error', 'Invalid QR', 'Could not read a token from this QR.');
+        await pauseScannerAfterResult();
+        return;
+      }
+
+      busy = true;
+      setPanel('', 'Checking In...', 'Please wait...');
+
+      try {
+        const result = await callAppsScriptJsonp(token);
+        setPanel(result.status, result.title, result.message, result.attendee);
+      } catch (err) {
+        setPanel('error', 'Network Error', err.message || 'Could not update the sheet.');
+      }
+
+      await pauseScannerAfterResult();
+    }
+
+    async function startScanner() {
+      if (running) return;
+
+      try {
+        scanner = new Html5Qrcode('reader');
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 240, height: 240 } },
+          async (decodedText) => {
+            await handleScan(decodedText);
+          }
+        );
+
+        running = true;
+        busy = false;
+        pausedAfterScan = false;
+        showNextButton(false);
+        setPanel('', 'Scanner Live', 'Point camera at badge QR.', null);
+      } catch (err) {
+        setPanel('error', 'Camera Error', err.message || 'Camera permission failed.');
+      }
+    }
+
+    async function stopScanner() {
+      try {
+        if (scanner && running) {
+          await scanner.stop();
+          await scanner.clear();
+        }
+      } catch (e) {}
+      scanner = null;
+      running = false;
+      busy = false;
+      pausedAfterScan = false;
+      showNextButton(false);
+      setPanel('', 'Stopped', 'Camera stopped.', null);
+    }
+
+    async function manualCheckIn() {
+      const token = document.getElementById('manualToken').value.trim();
+      if (!token) {
+        setPanel('error', 'Missing Token', 'Enter a token first.');
+        return;
+      }
+
+      busy = true;
+      setPanel('', 'Checking In...', 'Please wait...');
+
+      try {
+        const result = await callAppsScriptJsonp(token);
+        setPanel(result.status, result.title, result.message, result.attendee);
+        document.getElementById('manualToken').value = '';
+      } catch (err) {
+        setPanel('error', 'Network Error', err.message || 'Could not update the sheet.');
+      }
+
+      busy = false;
+      showNextButton(false);
+    }
+  </script>
+</body>
+</html>
