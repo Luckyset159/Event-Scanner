@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Event Gate Scanner</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f6fb;
+      color: #111827;
+    }
+    .wrap {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .card {
+      background: white;
+      border-radius: 22px;
+      padding: 20px;
+      box-shadow: 0 12px 30px rgba(0,0,0,.08);
+      margin-top: 20px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+    }
+    .sub {
+      color: #6b7280;
+      margin-bottom: 18px;
+    }
+    #reader {
+      width: 100%;
+      min-height: 320px;
+      border-radius: 18px;
+      overflow: hidden;
+      background: #000;
+    }
+    input, button {
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      font-size: 16px;
+      margin-top: 12px;
+      box-sizing: border-box;
+    }
+    input {
+      border: 1px solid #d1d5db;
+    }
+    button {
+      border: 0;
+      font-weight: 700;
+      cursor: pointer;
+      background: #111827;
+      color: white;
+    }
+    .secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+    .panel {
+      margin-top: 18px;
+      padding: 24px;
+      border-radius: 18px;
+      text-align: center;
+      background: #f9fafb;
+      border: 2px solid #e5e7eb;
+    }
+    .error { background: #fef2f2; border-color: #fca5a5; }
+    .title {
+      font-size: 36px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .msg {
+      font-size: 18px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Gate Scanner</h1>
+      <div class="sub">iPhone-friendly scanner page. This opens the QR check-in URL directly.</div>
+
+      <div id="reader"></div>
+
+      <button onclick="startScanner()">Start Camera</button>
+      <button class="secondary" onclick="stopScanner()">Stop Camera</button>
+
+      <input id="manualUrl" placeholder="Paste a QR URL manually if needed" />
+      <button class="secondary" onclick="openManualUrl()">Open QR URL</button>
+
+      <div id="panel" class="panel">
+        <div id="title" class="title">Ready</div>
+        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let scanner = null;
+    let running = false;
+    let lastScan = '';
+    let lastScanAt = 0;
+
+    function setPanel(title, msg, isError = false) {
+      const panel = document.getElementById('panel');
+      panel.className = 'panel' + (isError ? ' error' : '');
+      document.getElementById('title').textContent = title || 'Ready';
+      document.getElementById('msg').textContent = msg || '';
+    }
+
+    async function startScanner() {
+      if (running) return;
+
+      try {
+        scanner = new Html5Qrcode('reader');
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 240, height: 240 } },
+          async (decodedText) => {
+            const now = Date.now();
+            if (decodedText === lastScan && now - lastScanAt < 2500) return;
+            lastScan = decodedText;
+            lastScanAt = now;
+
+            if (!decodedText.startsWith('http://') && !decodedText.startsWith('https://')) {
+              setPanel('Invalid QR', 'This QR does not contain a URL.', true);
+              return;
+            }
+
+            setPanel('Opening Check-in', 'Sending to Apps Script...');
+            window.location.href = decodedText;
+          }
+        );
+
+        running = true;
+        setPanel('Scanner Live', 'Point camera at badge QR.');
+      } catch (err) {
+        setPanel('Camera Error', err.message || 'Camera permission failed.', true);
+      }
+    }
+
+    async function stopScanner() {
+      try {
+        if (scanner && running) {
+          await scanner.stop();
+          await scanner.clear();
+        }
+      } catch (e) {}
+      scanner = null;
+      running = false;
+      setPanel('Stopped', 'Camera stopped.');
+    }
+
+    function openManualUrl() {
+      const url = document.getElementById('manualUrl').value.trim();
+      if (!url) {
+        setPanel('Missing URL', 'Paste a QR URL first.', true);
+        return;
+      }
+      window.location.href = url;
+    }
+  </script>
+</body>
+</html>
