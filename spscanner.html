@@ -138,7 +138,7 @@
       <input id="manualToken" placeholder="Manual token fallback" />
       <button class="secondary" onclick="manualCheckIn()">Manual Check-in</button>
       
-      <input type="hidden" id="endpoint" placeholder="Apps Script Web App URL" value="https://script.google.com/macros/s/AKfycbz1HcYxE-J-TL35wTgEjjEiGit0Lji8DZeDe6FgWbi40NGldrOs4j-bf3kdBILYd9ZS/exec"/>
+      <input type="hidden" id="endpoint" placeholder="Apps Script Web App URL" value="https://script.google.com/macros/s/AKfycby5HOmRmXJi6PyVnGbbEzRAcYD_mVw2ARsJVVuVlybQHdTfZ4jgq4mn2fgl-BWUfdF_/exec"/>
       <input type="hidden" id="eventKey" placeholder="Event key (optional)" value="EVENT2026"/>
       <input id="checker" placeholder="Security name" value="Gate Security" />
 
@@ -197,40 +197,51 @@
     }
 
 function extractToken(scannedText) {
-  try {
-    // Check if the scanned text is a URL
-    if (scannedText.startsWith('http')) {
-      const url = new URL(scannedText);
-      // Look for the 'token' parameter specifically
-      const tokenParam = url.searchParams.get('token');
-      if (tokenParam) {
-        return tokenParam.trim();
-      }
-    }
-  } catch (e) {
-    console.error("URL Parsing error:", e);
-  }
-  // If it's not a URL or doesn't have the param, return the raw text
-  return scannedText.trim();
-}
-
-    function callAppsScriptJsonp(token) {
-      return new Promise((resolve, reject) => {
-        const endpoint = document.getElementById('endpoint').value.trim();
-        const checker = document.getElementById('checker').value.trim() || 'Gate Security';
-        const key = document.getElementById('eventKey').value.trim();
-
-        if (!endpoint) {
-          reject(new Error('Paste your Apps Script Web App URL first.'));
-          return;
+        console.log("Raw Scan:", scannedText);
+        try {
+            // If the QR contains the full URL we generated
+            if (scannedText.includes('token=')) {
+                const urlParts = scannedText.split('token=');
+                const tokenPart = urlParts.split('&');
+                return decodeURIComponent(tokenPart);
+            }
+            // If it's a URL but doesn't have token=, take the last part
+            if (scannedText.startsWith('http')) {
+                const url = new URL(scannedText);
+                return url.pathname.split('/').pop();
+            }
+        } catch (e) {
+            console.error("Parsing error", e);
         }
+        // Otherwise, it's a raw token string
+        return scannedText.trim();
+    }
+function callAppsScriptJsonp(token) {
+        return new Promise((resolve, reject) => {
+            const endpoint = document.getElementById('endpoint').value.trim();
+            const checker = document.getElementById('checker').value.trim();
+            const key = document.getElementById('eventKey').value.trim();
+            const cbName = 'scannerCallback_' + (++jsonpCounter);
 
-        const cbName = 'scannerCallback_' + (++jsonpCounter);
+            window[cbName] = (data) => {
+                cleanup();
+                resolve(data);
+            };
 
-        window[cbName] = function(data) {
-          cleanup();
-          resolve(data);
-        };
+            const url = `${endpoint}?action=apiCheckin&token=${encodeURIComponent(token)}&checker=${encodeURIComponent(checker)}&key=${encodeURIComponent(key)}&callback=${cbName}&_ts=${Date.now()}`;
+            
+            const script = document.createElement('script');
+            script.src = url;
+            const timer = setTimeout(() => { cleanup(); reject(new Error('Timeout')); }, 10000);
+            
+            function cleanup() {
+                if (script.parentNode) script.parentNode.removeChild(script);
+                delete window[cbName];
+                clearTimeout(timer);
+            }
+            document.body.appendChild(script);
+        });
+    }
 
         function cleanup() {
           try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
@@ -287,35 +298,25 @@ function extractToken(scannedText) {
       }
     }
 
-    async function handleScan(decodedText) {
-      const now = Date.now();
-      if (busy || pausedAfterScan) return;
-      if (decodedText === lastScan && now - lastScanAt < 2500) return;
+async function handleScan(decodedText) {
+        if (busy || pausedAfterScan) return;
+        
+        const token = extractToken(decodedText);
+        if (!token) return;
 
-      lastScan = decodedText;
-      lastScanAt = now;
-
-      const token = extractToken(decodedText);
-      if (!token) {
         busy = true;
-        setPanel('error', 'Invalid QR', 'Could not read a token from this QR.');
-        await pauseScannerAfterResult();
-        return;
-      }
+        setPanel('', 'Verifying...', `Token Detected: ${token}`);
 
-      busy = true;
-      setPanel('', 'Checking In...', 'Please wait...');
-
-      try {
-        const result = await callAppsScriptJsonp(token);
-        setPanel(result.status, result.title, result.message, result.attendee);
-      } catch (err) {
-        setPanel('error', 'Network Error', err.message || 'Could not update the sheet.');
-      }
-
-      await pauseScannerAfterResult();
+        try {
+            const result = await callAppsScriptJsonp(token);
+            setPanel(result.status, result.title, result.message, result.attendee);
+            await pauseScannerAfterResult();
+        } catch (err) {
+            setPanel('error', 'Sync Error', 'Check internet connection.');
+            busy = false;
+        }
     }
-
+    
     async function startScanner() {
       if (running) return;
 
