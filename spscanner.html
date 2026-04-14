@@ -196,15 +196,25 @@
       else btn.classList.add('hidden');
     }
 
-    function extractToken(scannedText) {
-      try {
-        if (scannedText.startsWith('http://') || scannedText.startsWith('https://')) {
-          const url = new URL(scannedText);
-          return url.searchParams.get('token') || '';
-        }
-      } catch (e) {}
+function extractToken(scannedText) {
+  try {
+    // If it's a URL, try to find a token parameter first
+    if (scannedText.startsWith('http://') || scannedText.startsWith('https://')) {
+      const url = new URL(scannedText);
+      const tokenFromUrl = url.searchParams.get('token');
+      
+      // If ?token= exists, use it. 
+      if (tokenFromUrl) return tokenFromUrl;
+      
+      // If it's a URL but has no token param, return the whole URL 
+      // (This handles cases where the token IS the URL)
       return scannedText.trim();
     }
+  } catch (e) {}
+  
+  // If it's not a URL at all, just return the text as the token
+  return scannedText.trim();
+}
 
     function callAppsScriptJsonp(token) {
       return new Promise((resolve, reject) => {
