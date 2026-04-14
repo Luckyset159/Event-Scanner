@@ -198,21 +198,19 @@
 
 function extractToken(scannedText) {
   try {
-    // If it's a URL, try to find a token parameter first
-    if (scannedText.startsWith('http://') || scannedText.startsWith('https://')) {
+    // Check if the scanned text is a URL
+    if (scannedText.startsWith('http')) {
       const url = new URL(scannedText);
-      const tokenFromUrl = url.searchParams.get('token');
-      
-      // If ?token= exists, use it. 
-      if (tokenFromUrl) return tokenFromUrl;
-      
-      // If it's a URL but has no token param, return the whole URL 
-      // (This handles cases where the token IS the URL)
-      return scannedText.trim();
+      // Look for the 'token' parameter specifically
+      const tokenParam = url.searchParams.get('token');
+      if (tokenParam) {
+        return tokenParam.trim();
+      }
     }
-  } catch (e) {}
-  
-  // If it's not a URL at all, just return the text as the token
+  } catch (e) {
+    console.error("URL Parsing error:", e);
+  }
+  // If it's not a URL or doesn't have the param, return the raw text
   return scannedText.trim();
 }
 
