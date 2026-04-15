@@ -119,15 +119,12 @@
 <body class="bg-idle">
   <div class="wrap">
     <div class="card">
-      <h1>SP Registration Scanner</h1>
+      <h1>Gate Scanner</h1>
       <div class="sub">One scan at a time. After each result, press <b>Scan Next</b>.</div>
-      <div id="panel" class="panel">
-        <div id="title" class="title">Ready</div>
-        <div id="name" class="name" style="display:none;"></div>
-        <div id="post" class="post" style="display:none;"></div>
-        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
-      </div>
-      <br>
+
+      <input id="endpoint" placeholder="Apps Script Web App URL" />
+      <input id="eventKey" placeholder="Event key (optional)" />
+      <input id="checker" placeholder="Security name" value="Gate Security" />
 
       <div id="reader"></div>
 
@@ -137,11 +134,13 @@
 
       <input id="manualToken" placeholder="Manual token fallback" />
       <button class="secondary" onclick="manualCheckIn()">Manual Check-in</button>
-      
-      <input type="hidden" id="endpoint" placeholder="Apps Script Web App URL" value="https://script.google.com/macros/s/AKfycby5HOmRmXJi6PyVnGbbEzRAcYD_mVw2ARsJVVuVlybQHdTfZ4jgq4mn2fgl-BWUfdF_/exec"/>
-      <input type="hidden" id="eventKey" placeholder="Event key (optional)" value="EVENT2026"/>
-      <input id="checker" placeholder="Security name" value="Gate Security" />
 
+      <div id="panel" class="panel">
+        <div id="title" class="title">Ready</div>
+        <div id="name" class="name" style="display:none;"></div>
+        <div id="post" class="post" style="display:none;"></div>
+        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
+      </div>
     </div>
   </div>
 
@@ -196,52 +195,33 @@
       else btn.classList.add('hidden');
     }
 
-function extractToken(scannedText) {
-        console.log("Raw Scan:", scannedText);
-        try {
-            // If the QR contains the full URL we generated
-            if (scannedText.includes('token=')) {
-                const urlParts = scannedText.split('token=');
-                const tokenPart = urlParts.split('&');
-                return decodeURIComponent(tokenPart);
-            }
-            // If it's a URL but doesn't have token=, take the last part
-            if (scannedText.startsWith('http')) {
-                const url = new URL(scannedText);
-                return url.pathname.split('/').pop();
-            }
-        } catch (e) {
-            console.error("Parsing error", e);
+    function extractToken(scannedText) {
+      try {
+        if (scannedText.startsWith('http://') || scannedText.startsWith('https://')) {
+          const url = new URL(scannedText);
+          return url.searchParams.get('token') || '';
         }
-        // Otherwise, it's a raw token string
-        return scannedText.trim();
+      } catch (e) {}
+      return scannedText.trim();
     }
-function callAppsScriptJsonp(token) {
-        return new Promise((resolve, reject) => {
-            const endpoint = document.getElementById('endpoint').value.trim();
-            const checker = document.getElementById('checker').value.trim();
-            const key = document.getElementById('eventKey').value.trim();
-            const cbName = 'scannerCallback_' + (++jsonpCounter);
 
-            window[cbName] = (data) => {
-                cleanup();
-                resolve(data);
-            };
+    function callAppsScriptJsonp(token) {
+      return new Promise((resolve, reject) => {
+        const endpoint = document.getElementById('endpoint').value.trim();
+        const checker = document.getElementById('checker').value.trim() || 'Gate Security';
+        const key = document.getElementById('eventKey').value.trim();
 
-            const url = `${endpoint}?action=apiCheckin&token=${encodeURIComponent(token)}&checker=${encodeURIComponent(checker)}&key=${encodeURIComponent(key)}&callback=${cbName}&_ts=${Date.now()}`;
-            
-            const script = document.createElement('script');
-            script.src = url;
-            const timer = setTimeout(() => { cleanup(); reject(new Error('Timeout')); }, 10000);
-            
-            function cleanup() {
-                if (script.parentNode) script.parentNode.removeChild(script);
-                delete window[cbName];
-                clearTimeout(timer);
-            }
-            document.body.appendChild(script);
-        });
-    }
+        if (!endpoint) {
+          reject(new Error('Paste your Apps Script Web App URL first.'));
+          return;
+        }
+
+        const cbName = 'scannerCallback_' + (++jsonpCounter);
+
+        window[cbName] = function(data) {
+          cleanup();
+          resolve(data);
+        };
 
         function cleanup() {
           try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
@@ -298,25 +278,35 @@ function callAppsScriptJsonp(token) {
       }
     }
 
-async function handleScan(decodedText) {
-        if (busy || pausedAfterScan) return;
-        
-        const token = extractToken(decodedText);
-        if (!token) return;
+    async function handleScan(decodedText) {
+      const now = Date.now();
+      if (busy || pausedAfterScan) return;
+      if (decodedText === lastScan && now - lastScanAt < 2500) return;
 
+      lastScan = decodedText;
+      lastScanAt = now;
+
+      const token = extractToken(decodedText);
+      if (!token) {
         busy = true;
-        setPanel('', 'Verifying...', `Token Detected: ${token}`);
+        setPanel('error', 'Invalid QR', 'Could not read a token from this QR.');
+        await pauseScannerAfterResult();
+        return;
+      }
 
-        try {
-            const result = await callAppsScriptJsonp(token);
-            setPanel(result.status, result.title, result.message, result.attendee);
-            await pauseScannerAfterResult();
-        } catch (err) {
-            setPanel('error', 'Sync Error', 'Check internet connection.');
-            busy = false;
-        }
+      busy = true;
+      setPanel('', 'Checking In...', 'Please wait...');
+
+      try {
+        const result = await callAppsScriptJsonp(token);
+        setPanel(result.status, result.title, result.message, result.attendee);
+      } catch (err) {
+        setPanel('error', 'Network Error', err.message || 'Could not update the sheet.');
+      }
+
+      await pauseScannerAfterResult();
     }
-    
+
     async function startScanner() {
       if (running) return;
 
