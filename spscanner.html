@@ -110,6 +110,381 @@
     .msg {
       font-size: 18px;
       line-height: 1.5;
+      word-break: break-word;
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body class="bg-idle">
+  <div class="wrap">
+    <div class="card">
+      <h1>Gate Scanner</h1>
+      <div class="sub">One scan at a time. After each result, press <b>Scan Next</b>.</div>
+
+      <div id="panel" class="panel">
+        <div id="title" class="title">Ready</div>
+        <div id="name" class="name" style="display:none;"></div>
+        <div id="post" class="post" style="display:none;"></div>
+        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
+      </div>
+
+      <div id="reader"></div>
+
+      <button id="startBtn" onclick="startScanner()">Start Camera</button>
+      <button id="stopBtn" class="secondary" onclick="stopScanner()">Stop Camera</button>
+      <button id="nextBtn" class="success-btn hidden" onclick="resumeScanner()">Scan Next</button>
+
+      <input id="manualToken" placeholder="Manual token fallback" />
+      <button class="secondary" onclick="manualCheckIn()">Manual Check-in</button>
+
+      <input
+        type="hidden"
+        id="endpoint"
+        value="https://script.google.com/macros/s/AKfycby5HOmRmXJi6PyVnGbbEzRAcYD_mVw2ARsJVVuVlybQHdTfZ4jgq4mn2fgl-BWUfdF_/exec"
+      />
+      <input type="hidden" id="eventKey" value="EVENT2026" />
+      <input id="checker" placeholder="Security name" value="Gate Security" />
+    </div>
+  </div>
+
+  <script>
+    let scanner = null;
+    let running = false;
+    let busy = false;
+    let pausedAfterScan = false;
+    let lastScan = '';
+    let lastScanAt = 0;
+    let jsonpCounter = 0;
+
+    function setBodyBg(type) {
+      document.body.classList.remove('bg-idle', 'bg-success', 'bg-error', 'bg-duplicate');
+      if (type === 'success') document.body.classList.add('bg-success');
+      else if (type === 'duplicate') document.body.classList.add('bg-duplicate');
+      else if (type === 'error' || type === 'invalid') document.body.classList.add('bg-error');
+      else document.body.classList.add('bg-idle');
+    }
+
+    function setPanel(type, title, msg, attendee) {
+      const panel = document.getElementById('panel');
+      panel.className = 'panel';
+      if (type === 'success') panel.classList.add('success');
+      else if (type === 'duplicate') panel.classList.add('duplicate');
+      else if (type === 'error' || type === 'invalid') panel.classList.add('error');
+
+      setBodyBg(type);
+
+      document.getElementById('title').textContent = title || 'Ready';
+      document.getElementById('msg').textContent = msg || '';
+
+      const nameEl = document.getElementById('name');
+      const postEl = document.getElementById('post');
+
+      if (attendee && attendee.name) {
+        nameEl.style.display = '';
+        postEl.style.display = '';
+        nameEl.textContent = attendee.name;
+        postEl.textContent = attendee.post || '';
+      } else {
+        nameEl.style.display = 'none';
+        postEl.style.display = 'none';
+        nameEl.textContent = '';
+        postEl.textContent = '';
+      }
+    }
+
+    function showNextButton(show) {
+      const btn = document.getElementById('nextBtn');
+      if (show) btn.classList.remove('hidden');
+      else btn.classList.add('hidden');
+    }
+
+    function extractToken(scannedText) {
+      const text = String(scannedText || '').trim();
+      if (!text) return '';
+
+      try {
+        if (/^https?:\/\//i.test(text)) {
+          const url = new URL(text);
+          const token = url.searchParams.get('token');
+          if (token) return token.trim();
+        }
+      } catch (e) {}
+
+      const match = text.match(/[?&]token=([^&#\s]+)/i);
+      if (match && match[1]) {
+        try {
+          return decodeURIComponent(match[1]).trim();
+        } catch (e) {
+          return match[1].trim();
+        }
+      }
+
+      return text;
+    }
+
+    function callAppsScriptJsonp(token) {
+      return new Promise((resolve, reject) => {
+        const endpoint = document.getElementById('endpoint').value.trim();
+        const checker = document.getElementById('checker').value.trim() || 'Gate Security';
+        const key = document.getElementById('eventKey').value.trim();
+
+        if (!endpoint) {
+          reject(new Error('Apps Script URL is missing.'));
+          return;
+        }
+
+        const cbName = 'scannerCallback_' + (++jsonpCounter);
+
+        window[cbName] = function(data) {
+          cleanup();
+          resolve(data);
+        };
+
+        let script = null;
+        let timer = null;
+
+        function cleanup() {
+          try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+          if (timer) clearTimeout(timer);
+        }
+
+        const url = new URL(endpoint);
+        url.searchParams.set('action', 'apiCheckin');
+        url.searchParams.set('token', token);
+        url.searchParams.set('checker', checker);
+        url.searchParams.set('key', key);
+        url.searchParams.set('callback', cbName);
+        url.searchParams.set('_ts', Date.now());
+
+        script = document.createElement('script');
+        script.src = url.toString();
+
+        script.onerror = function() {
+          cleanup();
+          reject(new Error('Could not reach Apps Script.'));
+        };
+
+        timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('Apps Script timed out.'));
+        }, 10000);
+
+        document.body.appendChild(script);
+      });
+    }
+
+    async function pauseScannerAfterResult() {
+      if (!scanner || !running) return;
+      try {
+        await scanner.pause(true);
+        pausedAfterScan = true;
+      } catch (e) {}
+      showNextButton(true);
+    }
+
+    async function resumeScanner() {
+      if (!scanner || !running) return;
+      try {
+        await scanner.resume();
+        pausedAfterScan = false;
+        busy = false;
+        showNextButton(false);
+        setPanel('', 'Scanner Live', 'Point camera at the next badge.', null);
+        lastScan = '';
+        lastScanAt = 0;
+      } catch (e) {
+        setPanel('error', 'Resume Failed', 'Could not restart camera. Tap Stop Camera, then Start Camera.');
+      }
+    }
+
+    async function handleScan(decodedText) {
+      const now = Date.now();
+      if (busy || pausedAfterScan) return;
+
+      const normalized = String(decodedText || '').trim();
+      if (!normalized) return;
+      if (normalized === lastScan && now - lastScanAt < 2500) return;
+
+      lastScan = normalized;
+      lastScanAt = now;
+
+      const token = extractToken(normalized);
+      if (!token) {
+        busy = true;
+        setPanel('error', 'Invalid QR', 'Could not read a token from this QR.');
+        await pauseScannerAfterResult();
+        return;
+      }
+
+      busy = true;
+      await pauseScannerAfterResult();
+      setPanel('', 'Checking In...', 'Please wait...');
+
+      try {
+        const result = await callAppsScriptJsonp(token);
+        setPanel(result.status, result.title, result.message, result.attendee);
+      } catch (err) {
+        setPanel('error', 'Network Error', err.message || 'Could not update the sheet.');
+      }
+    }
+
+    async function startScanner() {
+      if (running) return;
+
+      try {
+        scanner = new Html5Qrcode('reader');
+        await scanner.start(
+          { facingMode: { exact: 'environment' } },
+          { fps: 10, qrbox: { width: 240, height: 240 } },
+          async (decodedText) => {
+            await handleScan(decodedText);
+          }
+        );
+
+        running = true;
+        busy = false;
+        pausedAfterScan = false;
+        showNextButton(false);
+        setPanel('', 'Scanner Live', 'Point camera at badge QR.', null);
+      } catch (err) {
+        try {
+          scanner = new Html5Qrcode('reader');
+          await scanner.start(
+            { facingMode: 'environment' },
+            { fps: 10, qrbox: { width: 240, height: 240 } },
+            async (decodedText) => {
+              await handleScan(decodedText);
+            }
+          );
+
+          running = true;
+          busy = false;
+          pausedAfterScan = false;
+          showNextButton(false);
+          setPanel('', 'Scanner Live', 'Point camera at badge QR.', null);
+        } catch (err2) {
+          setPanel('error', 'Camera Error', err2.message || 'Camera permission failed.');
+        }
+      }
+    }
+
+    async function stopScanner() {
+      try {
+        if (scanner && running) {
+          await scanner.stop();
+          await scanner.clear();
+        }
+      } catch (e) {}
+      scanner = null;
+      running = false;
+      busy = false;
+      pausedAfterScan = false;
+      showNextButton(false);
+      setPanel('', 'Stopped', 'Camera stopped.', null);
+    }
+
+    async function manualCheckIn() {
+      const token = document.getElementById('manualToken').value.trim();
+      if (!token) {
+        setPanel('error', 'Missing Token', 'Enter a token first.');
+        return;
+      }
+
+      busy = true;
+      setPanel('', 'Checking In...', 'Please wait...');
+
+      try {
+        const result = await callAppsScriptJsonp(token);
+        setPanel(result.status, result.title, result.message, result.attendee);
+        document.getElementById('manualToken').value = '';
+      } catch (err) {
+        setPanel('error', 'Network Error', err.message || 'Could not update the sheet.');
+      }
+
+      busy = false;
+      showNextButton(false);
+    }
+  </script>
+</body>
+</html>    .sub {
+      color: #6b7280;
+      margin-bottom: 18px;
+    }
+    #reader {
+      width: 100%;
+      min-height: 320px;
+      border-radius: 18px;
+      overflow: hidden;
+      background: #000;
+    }
+    input, button {
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      font-size: 16px;
+      margin-top: 12px;
+      box-sizing: border-box;
+    }
+    input {
+      border: 1px solid #d1d5db;
+    }
+    button {
+      border: 0;
+      font-weight: 700;
+      cursor: pointer;
+      background: #111827;
+      color: white;
+    }
+    .secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+    .success-btn {
+      background: #16a34a;
+      color: white;
+    }
+    .panel {
+      margin-top: 18px;
+      padding: 24px;
+      border-radius: 18px;
+      text-align: center;
+      background: #f9fafb;
+      border: 2px solid #e5e7eb;
+      transition: all 0.25s ease;
+    }
+    .success {
+      background: #ecfdf5;
+      border-color: #86efac;
+    }
+    .duplicate {
+      background: #fff7ed;
+      border-color: #fdba74;
+    }
+    .error {
+      background: #fef2f2;
+      border-color: #fca5a5;
+    }
+    .title {
+      font-size: 36px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .name {
+      font-size: 30px;
+      font-weight: 800;
+      margin: 8px 0 4px;
+    }
+    .post {
+      color: #6b7280;
+      font-size: 18px;
+      margin-bottom: 10px;
+    }
+    .msg {
+      font-size: 18px;
+      line-height: 1.5;
     }
     .hidden {
       display: none !important;
