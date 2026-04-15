@@ -122,6 +122,12 @@
       <h1>Gate Scanner</h1>
       <div class="sub">One scan at a time. After each result, press <b>Scan Next</b>.</div>
 
+      <div id="panel" class="panel">
+        <div id="title" class="title">Ready</div>
+        <div id="name" class="name" style="display:none;"></div>
+        <div id="post" class="post" style="display:none;"></div>
+        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
+      </div>
 
       <div id="reader"></div>
 
@@ -132,15 +138,9 @@
       <input id="manualToken" placeholder="Manual token fallback" />
       <button class="secondary" onclick="manualCheckIn()">Manual Check-in</button>
 
-      <div id="panel" class="panel">
-        <div id="title" class="title">Ready</div>
-        <div id="name" class="name" style="display:none;"></div>
-        <div id="post" class="post" style="display:none;"></div>
-        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
-      </div>
       
-      <input id="endpoint" placeholder="Apps Script Web App URL" /
-      <input id="eventKey" placeholder="Event key (optional)" />
+      <input id="endpoint" placeholder="Apps Script Web App URL" value="https://script.google.com/macros/s/AKfycby5HOmRmXJi6PyVnGbbEzRAcYD_mVw2ARsJVVuVlybQHdTfZ4jgq4mn2fgl-BWUfdF_/exec" /
+      <input id="eventKey" placeholder="Event key (optional)" value="EVENT2026" />
       <input id="checker" placeholder="Security name" value="Gate Security" />
       
     </div>
