@@ -110,6 +110,7 @@
     .msg {
       font-size: 18px;
       line-height: 1.5;
+      word-break: break-word;
     }
     .hidden {
       display: none !important;
@@ -120,11 +121,14 @@
   <div class="wrap">
     <div class="card">
       <h1>Gate Scanner</h1>
-      <div class="sub">One scan at a time. After each result, press <b>Scan Next</b>.</div>
+      <div class="sub">After each result, press <b>Scan Next</b>.</div>
 
-      <input id="endpoint" placeholder="Apps Script Web App URL" />
-      <input id="eventKey" placeholder="Event key (optional)" />
-      <input id="checker" placeholder="Security name" value="Gate Security" />
+      <div id="panel" class="panel">
+        <div id="title" class="title">Ready</div>
+        <div id="name" class="name" style="display:none;"></div>
+        <div id="post" class="post" style="display:none;"></div>
+        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
+      </div>
 
       <div id="reader"></div>
 
@@ -135,12 +139,13 @@
       <input id="manualToken" placeholder="Manual token fallback" />
       <button class="secondary" onclick="manualCheckIn()">Manual Check-in</button>
 
-      <div id="panel" class="panel">
-        <div id="title" class="title">Ready</div>
-        <div id="name" class="name" style="display:none;"></div>
-        <div id="post" class="post" style="display:none;"></div>
-        <div id="msg" class="msg">Tap Start Camera and point at a QR code.</div>
-      </div>
+      <input
+        type="hidden"
+        id="endpoint"
+        value="https://script.google.com/macros/s/AKfycby5HOmRmXJi6PyVnGbbEzRAcYD_mVw2ARsJVVuVlybQHdTfZ4jgq4mn2fgl-BWUfdF_/exec"
+      />
+      <input type="hidden" id="eventKey" value="EVENT2026" />
+      <input id="checker" placeholder="Security name" value="Gate Security" />
     </div>
   </div>
 
@@ -196,13 +201,27 @@
     }
 
     function extractToken(scannedText) {
+      const text = String(scannedText || '').trim();
+      if (!text) return '';
+
       try {
-        if (scannedText.startsWith('http://') || scannedText.startsWith('https://')) {
-          const url = new URL(scannedText);
-          return url.searchParams.get('token') || '';
+        if (/^https?:\/\//i.test(text)) {
+          const url = new URL(text);
+          const token = url.searchParams.get('token');
+          if (token) return token.trim();
         }
       } catch (e) {}
-      return scannedText.trim();
+
+      const match = text.match(/[?&]token=([^&#\s]+)/i);
+      if (match && match[1]) {
+        try {
+          return decodeURIComponent(match[1]).trim();
+        } catch (e) {
+          return match[1].trim();
+        }
+      }
+
+      return text;
     }
 
     function callAppsScriptJsonp(token) {
@@ -212,7 +231,7 @@
         const key = document.getElementById('eventKey').value.trim();
 
         if (!endpoint) {
-          reject(new Error('Paste your Apps Script Web App URL first.'));
+          reject(new Error('Apps Script URL is missing.'));
           return;
         }
 
@@ -223,10 +242,13 @@
           resolve(data);
         };
 
+        let script = null;
+        let timer = null;
+
         function cleanup() {
           try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
-          if (script.parentNode) script.parentNode.removeChild(script);
-          clearTimeout(timer);
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+          if (timer) clearTimeout(timer);
         }
 
         const url = new URL(endpoint);
@@ -237,7 +259,7 @@
         url.searchParams.set('callback', cbName);
         url.searchParams.set('_ts', Date.now());
 
-        const script = document.createElement('script');
+        script = document.createElement('script');
         script.src = url.toString();
 
         script.onerror = function() {
@@ -245,10 +267,10 @@
           reject(new Error('Could not reach Apps Script.'));
         };
 
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
           cleanup();
           reject(new Error('Apps Script timed out.'));
-        }, 8000);
+        }, 10000);
 
         document.body.appendChild(script);
       });
@@ -281,12 +303,15 @@
     async function handleScan(decodedText) {
       const now = Date.now();
       if (busy || pausedAfterScan) return;
-      if (decodedText === lastScan && now - lastScanAt < 2500) return;
 
-      lastScan = decodedText;
+      const normalized = String(decodedText || '').trim();
+      if (!normalized) return;
+      if (normalized === lastScan && now - lastScanAt < 2500) return;
+
+      lastScan = normalized;
       lastScanAt = now;
 
-      const token = extractToken(decodedText);
+      const token = extractToken(normalized);
       if (!token) {
         busy = true;
         setPanel('error', 'Invalid QR', 'Could not read a token from this QR.');
@@ -295,6 +320,7 @@
       }
 
       busy = true;
+      await pauseScannerAfterResult();
       setPanel('', 'Checking In...', 'Please wait...');
 
       try {
@@ -303,8 +329,6 @@
       } catch (err) {
         setPanel('error', 'Network Error', err.message || 'Could not update the sheet.');
       }
-
-      await pauseScannerAfterResult();
     }
 
     async function startScanner() {
@@ -313,7 +337,7 @@
       try {
         scanner = new Html5Qrcode('reader');
         await scanner.start(
-          { facingMode: 'environment' },
+          { facingMode: { exact: 'environment' } },
           { fps: 10, qrbox: { width: 240, height: 240 } },
           async (decodedText) => {
             await handleScan(decodedText);
@@ -326,7 +350,24 @@
         showNextButton(false);
         setPanel('', 'Scanner Live', 'Point camera at badge QR.', null);
       } catch (err) {
-        setPanel('error', 'Camera Error', err.message || 'Camera permission failed.');
+        try {
+          scanner = new Html5Qrcode('reader');
+          await scanner.start(
+            { facingMode: 'environment' },
+            { fps: 10, qrbox: { width: 240, height: 240 } },
+            async (decodedText) => {
+              await handleScan(decodedText);
+            }
+          );
+
+          running = true;
+          busy = false;
+          pausedAfterScan = false;
+          showNextButton(false);
+          setPanel('', 'Scanner Live', 'Point camera at badge QR.', null);
+        } catch (err2) {
+          setPanel('error', 'Camera Error', err2.message || 'Camera permission failed.');
+        }
       }
     }
 
