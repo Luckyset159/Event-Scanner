@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SP Admin Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --card: #ffffff;
+      --text: #111827;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --shadow: 0 12px 30px rgba(0,0,0,.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+
+    .header {
+      margin-bottom: 14px;
+    }
+
+    .title {
+      font-size: 28px;
+      font-weight: 800;
+      margin: 0 0 6px;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      margin-top: 14px;
+    }
+
+    .auth-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    input, button {
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      font-size: 16px;
+      border: 1px solid var(--line);
+    }
+
+    button {
+      width: auto;
+      min-width: 110px;
+      border: 0;
+      background: #111827;
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .stat {
+      background: #f9fafb;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px 16px;
+      text-align: center;
+    }
+
+    .stat-label {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 34px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .big-stat {
+      margin-top: 12px;
+      background: #111827;
+      color: #fff;
+      border-radius: 20px;
+      padding: 22px 18px;
+      text-align: center;
+    }
+
+    .big-stat-label {
+      font-size: 14px;
+      opacity: 0.8;
+      margin-bottom: 8px;
+    }
+
+    .big-stat-value {
+      font-size: 48px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .footer {
+      margin-top: 14px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .error {
+      margin-top: 12px;
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-size: 14px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 520px) {
+      .title { font-size: 24px; }
+      .stat-value { font-size: 30px; }
+      .big-stat-value { font-size: 42px; }
+
+      .auth-row {
+        grid-template-columns: 1fr;
+      }
+
+      button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1 class="title">SP Admin Dashboard</h1>
+      <div class="sub">Live registration summary.</div>
+    </div>
+
+    <div class="card">
+      <div class="auth-row">
+        <input id="adminKey" type="password" placeholder="Enter admin key" />
+        <button onclick="saveAndLoad()">Open</button>
+      </div>
+      <div id="errorBox" class="error hidden"></div>
+    </div>
+
+    <div id="dashboard" class="hidden">
+      <div class="card">
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-label">Total Attendees</div>
+            <div id="total" class="stat-value">0</div>
+          </div>
+
+          <div class="stat">
+            <div class="stat-label">Registered</div>
+            <div id="registered" class="stat-value">0</div>
+          </div>
+
+          <div class="stat">
+            <div class="stat-label">Pending</div>
+            <div id="pending" class="stat-value">0</div>
+          </div>
+
+          <div class="stat">
+            <div class="stat-label">Refresh</div>
+            <div id="countdown" class="stat-value">5s</div>
+          </div>
+        </div>
+
+        <div class="big-stat">
+          <div class="big-stat-label">Completion</div>
+          <div id="completion" class="big-stat-value">0%</div>
+        </div>
+
+        <div class="footer">
+          Last updated: <span id="updatedAt">-</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const ENDPOINT = 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
+
+    let pollTimer = null;
+    let countdownTimer = null;
+    let secondsLeft = 5;
+    let jsonpCounter = 0;
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function showError(message) {
+      $('errorBox').textContent = message || 'Something went wrong.';
+      $('errorBox').classList.remove('hidden');
+    }
+
+    function hideError() {
+      $('errorBox').classList.add('hidden');
+      $('errorBox').textContent = '';
+    }
+
+    function updateCountdown() {
+      $('countdown').textContent = secondsLeft + 's';
+    }
+
+    function saveAndLoad() {
+      const key = $('adminKey').value.trim();
+      if (!key) {
+        showError('Please enter the admin key.');
+        return;
+      }
+
+      localStorage.setItem('sp_admin_key', key);
+      loadStats();
+      startPolling();
+    }
+
+    function restoreKey() {
+      const saved = localStorage.getItem('sp_admin_key') || '';
+      if (saved) {
+        $('adminKey').value = saved;
+        loadStats();
+        startPolling();
+      }
+    }
+
+    function startPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      if (countdownTimer) clearInterval(countdownTimer);
+
+      secondsLeft = 5;
+      updateCountdown();
+
+      countdownTimer = setInterval(() => {
+        secondsLeft--;
+        if (secondsLeft <= 0) secondsLeft = 5;
+        updateCountdown();
+      }, 1000);
+
+      pollTimer = setInterval(() => {
+        secondsLeft = 5;
+        updateCountdown();
+        loadStats();
+      }, 5000);
+    }
+
+    function fetchJsonp(url) {
+      return new Promise((resolve, reject) => {
+        const callbackName = 'adminCallback_' + (++jsonpCounter);
+        let script = null;
+        let timer = null;
+
+        window[callbackName] = function(data) {
+          cleanup();
+          resolve(data);
+        };
+
+        function cleanup() {
+          try { delete window[callbackName]; } catch (e) { window[callbackName] = undefined; }
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+          if (timer) clearTimeout(timer);
+        }
+
+        const finalUrl = new URL(url);
+        finalUrl.searchParams.set('callback', callbackName);
+        finalUrl.searchParams.set('_ts', Date.now());
+
+        script = document.createElement('script');
+        script.src = finalUrl.toString();
+
+        script.onerror = function() {
+          cleanup();
+          reject(new Error('Could not reach Apps Script.'));
+        };
+
+        timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('Stats request timed out.'));
+        }, 10000);
+
+        document.body.appendChild(script);
+      });
+    }
+
+    async function loadStats() {
+      const key = $('adminKey').value.trim();
+      if (!key) return;
+
+      hideError();
+
+      try {
+        const url = new URL(ENDPOINT);
+        url.searchParams.set('action', 'stats');
+        url.searchParams.set('adminKey', key);
+
+        const data = await fetchJsonp(url.toString());
+
+        if (!data || !data.ok) {
+          $('dashboard').classList.add('hidden');
+          showError((data && data.error) ? data.error : 'Unauthorized or invalid response.');
+          return;
+        }
+
+        $('dashboard').classList.remove('hidden');
+        $('total').textContent = data.total || 0;
+        $('registered').textContent = data.registered || 0;
+        $('pending').textContent = data.pending || 0;
+        $('completion').textContent = (data.completion || 0) + '%';
+        $('updatedAt').textContent = data.updatedAt || '-';
+      } catch (err) {
+        $('dashboard').classList.add('hidden');
+        showError(err.message || 'Could not load stats.');
+      }
+    }
+
+    restoreKey();
+  </script>
+</body>
+</html>
